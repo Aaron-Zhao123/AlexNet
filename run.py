@@ -1,5 +1,5 @@
 import os
-import alexnet_train
+import alexnet_training
 import sys
 
 def compute_file_name(p):
@@ -79,7 +79,7 @@ while (crates['cov2'] < 2):
             ('-lambda1', 1e-5),
             ('-lambda2', 1e-5)
             ]
-        acc = train.main(param)
+        acc = alexnet_training.main(param)
 
         sys.exit()
 
