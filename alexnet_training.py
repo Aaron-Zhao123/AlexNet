@@ -5,9 +5,11 @@ import os
 import pickle
 import time
 import getopt
+import cv2
 
 from alexnet import AlexNet
 from caffe_classes import class_names
+from datagenerator import ImageDataGenerator
 
 
 
@@ -98,11 +100,12 @@ def initialize_weights_mask(first_time_training, mask_dir, file_name):
             'fc8': np.ones([NUM_CLASSES])
         }
 
-        with open(mask_dir + 'maskcov0cov0fc0fc0fc0.pkl', 'wb') as f:
-            pickle.dump((weights_mask,biases_mask), f)
+        # with open(mask_dir + 'maskcov0cov0fc0fc0fc0.pkl', 'wb') as f:
+        #     pickle.dump((weights_mask,biases_mask), f)
     else:
         with open(mask_dir + file_name,'rb') as f:
             (weights_mask, biases_mask) = pickle.load(f)
+    print('weights set')
     return (weights_mask, biases_mask)
 
 def prune_info(weights, counting):
@@ -157,83 +160,6 @@ def plot_weights(weights,pruning_info):
         fig.savefig('fig_v3/weights'+pruning_info)
         plt.close(fig)
 
-
-def cov_network(images, weights, biases, keep_prob):
-    batch_size = 128
-    NUM_CLASSES = 10
-    IMAGE_SIZE = 32
-    NUM_CHANNELS = 3
-    # cov1_weight = weights['cov1'] * weights_mask['cov1']
-    # conv1
-    conv = tf.nn.conv2d(images, weights['cov1'], [1, 1, 1, 1], padding='SAME')
-    # conv = tf.nn.conv2d(images, cov1_weight, [1, 1, 1, 1], padding='SAME')
-
-    pre_activation = tf.nn.bias_add(conv, biases['cov1'])
-    conv1 = tf.nn.relu(pre_activation)
-    l1_cov1 = tf.reduce_sum(tf.abs(weights['cov1']))
-    l2_cov1 = tf.nn.l2_loss(weights['cov1'])
-
-    # pool1
-    pool1 = tf.nn.max_pool(conv1, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1],
-                         padding='SAME', name='pool1')
-    # norm1
-    norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
-                    name='norm1')
-
-    # conv2
-    # cov2_weight = weights['cov2'] * weights_mask['cov2']
-    conv = tf.nn.conv2d(norm1, weights['cov2'], [1, 1, 1, 1], padding='SAME')
-    # conv = tf.nn.conv2d(norm1, cov2_weight, [1, 1, 1, 1], padding='SAME')
-    l1_cov2 = tf.reduce_sum(tf.abs(weights['cov2']))
-    l2_cov2 = tf.nn.l2_loss(weights['cov2'])
-
-    pre_activation = tf.nn.bias_add(conv, biases['cov2'])
-    conv2 = tf.nn.relu(pre_activation)
-
-    # norm2
-    norm2 = tf.nn.lrn(conv2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
-                    name='norm2')
-    # pool2
-    pool2 = tf.nn.max_pool(norm2, ksize=[1, 3, 3, 1],
-                         strides=[1, 2, 2, 1], padding='SAME', name='pool2')
-
-    # local3
-    # Move everything into depth so we can perform a single matrix multiply.
-    # dim = 1
-    # for d in pool2.get_shape()[1:].as_list():
-    #   dim *= d
-    # print(pool2.get_shape().as_list())
-    # reshape = tf.reshape(pool2, [-1, IMAGE_SIZE // 4 * IMAGE_SIZE // 4 * 64])
-    reshape = tf.reshape(pool2, [-1, 6 * 6 * 64])
-    # reshape = tf.reshape(pool2, [BATCH_SIZE, dim])
-    # print(reshape)
-
-    # fc1_weight = weights['fc1'] * weights_mask['fc1']
-    local3 = tf.nn.relu(tf.matmul(reshape, weights['fc1']) + biases['fc1'])
-    # dropout
-    local3_drop = tf.nn.dropout(local3, keep_prob)
-
-    l1_fc1 = tf.reduce_sum(tf.abs(weights['fc1']))
-    l2_fc1 = tf.nn.l2_loss(weights['fc1'])
-# # local4
-    # fc2_weight = weights['fc2'] * weights_mask['fc2']
-    local4 = tf.nn.relu(tf.matmul(local3_drop, weights['fc2']) + biases['fc2'])
-    local4_drop = tf.nn.dropout(local4, keep_prob)
-
-    l1_fc2 = tf.reduce_sum(tf.abs(weights['fc2']))
-    l2_fc2 = tf.nn.l2_loss(weights['fc2'])
-# # We don't apply softmax here because
-# # tf.nn.sparse_softmax_cross_entropy_with_logits accepts the unscaled logits
-# # and performs the softmax internally for efficiency.
-    # fc3_weight = weights['fc3'] * weights_mask['fc3']
-    softmax_linear = tf.add(tf.matmul(local4_drop, weights['fc3']), biases['fc3'])
-
-    l1_fc3 = tf.reduce_sum(tf.abs(weights['fc3']))
-    l2_fc3 = tf.nn.l2_loss(weights['fc3'])
-    l1 = l1_cov1 + l1_cov2 + l1_fc1 + l1_fc2 + l1_fc3
-    l2 = l2_cov1 + l2_cov2 + l2_fc1 + l2_fc2 + l2_fc3
-    return (l1, l2, softmax_linear)
-
 def save_pkl_model(weights, biases, save_dir ,f_name):
     # name = os.path.join(data_path, "cifar-10-batches-py/", filename)
     # if not os.path.exists(path):
@@ -248,77 +174,10 @@ def save_pkl_model(weights, biases, save_dir ,f_name):
         print('Created a pickle file')
         pickle.dump((weights_val, biases_val), f)
 
-def pre_process_image(image, training):
-    # This function takes a single image as input,
-    # and a boolean whether to build the training or testing graph.
-
-    num_channels = 3
-    img_size_cropped = 24
-
-    if training:
-        # For training, add the following to the TensorFlow graph.
-
-        # Randomly crop the input image.
-        image = tf.random_crop(image, size=[img_size_cropped, img_size_cropped, num_channels])
-
-        # Randomly flip the image horizontally.
-        image = tf.image.random_flip_left_right(image)
-
-        # Randomly adjust hue, contrast and saturation.
-        image = tf.image.random_hue(image, max_delta=0.05)
-        image = tf.image.random_contrast(image, lower=0.3, upper=1.0)
-        image = tf.image.random_brightness(image, max_delta=0.2)
-        image = tf.image.random_saturation(image, lower=0.0, upper=2.0)
-
-        # Some of these functions may overflow and result in pixel
-        # values beyond the [0, 1] range. It is unclear from the
-        # documentation of TensorFlow 0.10.0rc0 whether this is
-        # intended. A simple solution is to limit the range.
-
-        # Limit the image pixels between [0, 1] in case of overflow.
-        image = tf.minimum(image, 1.0)
-        image = tf.maximum(image, 0.0)
-    else:
-        # For training, add the following to the TensorFlow graph.
-
-        # Crop the input image around the centre so it is the same
-        # size as images that are randomly cropped during training.
-        image = tf.image.resize_image_with_crop_or_pad(image,
-                                                       target_height=img_size_cropped,
-                                                       target_width=img_size_cropped)
-
-    return image
-
 def calculate_non_zero_weights(weight):
     count = (weight != 0).sum()
     size = len(weight.flatten())
     return (count,size)
-
-def pre_process(images, training):
-    # Use TensorFlow to loop over all the input images and call
-    # the function above which takes a single image as input.
-    images = tf.map_fn(lambda image: pre_process_image(image, training), images)
-    return images
-
-def mask_gradients(weights, grads_and_names, weight_masks, biases, biases_mask, WITH_BIASES):
-    new_grads = []
-    keys = ['cov1', 'cov2', 'fc1', 'fc2', 'fc3']
-    for grad,var_name in grads_and_names:
-        flag = 0
-        index = 0
-        for key in keys:
-            if (weights[key]== var_name):
-                mask = weight_masks[key]
-                new_grads.append((tf.multiply(tf.constant(mask, dtype = tf.float32),grad),var_name))
-                flag = 1
-            if (biases[key]== var_name and WITH_BIASES == True):
-                mask = biases_mask[key]
-                new_grads.append((tf.multiply(tf.constant(mask, dtype = tf.float32),grad),var_name))
-                flag = 1
-        # if flag is not set
-        if (flag == 0):
-            new_grads.append((grad,var_name))
-    return new_grads
 
 def ClipIfNotNone(grad):
     if grad is None:
@@ -391,9 +250,10 @@ def main(argv = None):
         except getopt.error, msg:
             raise Usage(msg)
         epochs = 100
-        NUM_CLASSES = 10
         dropout = 0.5
-        BATCH_SIZE = 128
+        batch_size = 1
+        num_classes = 1000
+
         NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 50000
         INITIAL_LEARNING_RATE = 0.001
         INITIAL_LEARNING_RATE = lr
@@ -403,9 +263,11 @@ def main(argv = None):
         TEST = 1
         TRAIN_OR_TEST = 0
         NUM_CHANNELS = 3
+        first_time_load = 1
 
         mask_dir = parent_dir
         weights_dir = parent_dir
+        LOCAL_TEST = 1
 
 
         file_name_part = compute_file_name(cRates)
@@ -417,8 +279,9 @@ def main(argv = None):
 
 
         meta_data_dir = '/local/scratch/share/ImageNet/ILSVRC/Data/CLS-LOC'
+        index_file_dir = '/local/scratch/share/ImageNet/ILSVRC/ImageSets/CLS-LOC/'
+        index_file_dir = 'cpu_test_data/'
         if (TRAIN):
-            index_file_dir = '/local/scratch/share/ImageNet/ILSVRC/ImageSets/CLS-LOC/'
             train_file_txt = index_file_dir + 'train.txt'
             val_file_txt = index_file_dir + 'val.txt'
             test_file_txt = index_file_dir + 'test.txt'
@@ -446,18 +309,19 @@ def main(argv = None):
         model = AlexNet(x, keep_prob, num_classes)
 
         score = model.fc8
+        softmax = tf.nn.softmax(score)
 
         with tf.name_scope("cross_ent"):
             loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits = score, labels = y))
 
         with tf.name_scope("train"):
-            l1_norm = lambda_1 * l1
-            l2_norm = lambda_2 * l2
-            regulization_loss = l1_norm + l2_norm
+            # l1_norm = lambda_1 * l1
+            # l2_norm = lambda_2 * l2
+            # regulization_loss = l1_norm + l2_norm
 
             opt = tf.train.AdamOptimizer(lr)
-            loss_value = tf.reduce_mean(cross_entropy) + regulization_loss
-            grads = opt.compute_gradients(loss_value)
+            # loss_value = tf.reduce_mean(cross_entropy) + regulization_loss
+            grads = opt.compute_gradients(loss)
             org_grads = [(ClipIfNotNone(grad), var) for grad, var in grads]
             train_step = opt.apply_gradients(org_grads)
 
@@ -491,14 +355,14 @@ def main(argv = None):
                                                  horizontal_flip = True, shuffle = True)
             val_generator = ImageDataGenerator(val_file_txt, shuffle = False)
 
-        test_generator = ImageDataGenerator(test_file_txt, shuffle = False)
+        # test_generator = ImageDataGenerator(test_file_txt, shuffle = False)
 
         if (TRAIN):
             # Get the number of training/validation steps per epoch
             train_batches_per_epoch = np.floor(train_generator.data_size / batch_size).astype(np.int16)
             val_batches_per_epoch = np.floor(val_generator.data_size / batch_size).astype(np.int16)
 
-        test_batches_per_epoch = np.floor(test_generator.data_size / batch_size).astype(np.int16)
+        # test_batches_per_epoch = np.floor(test_generator.data_size / batch_size).astype(np.int16)
 
         with tf.Session() as sess:
             sess.run(init)
@@ -555,14 +419,37 @@ def main(argv = None):
 
             if (TEST):
                 test_acc_list = []
-                for step in (test_batches_per_epoch):
-                    test_acc = sess.run(accuracy, feed_dict = {
-                                            x: images_test,
-                                            y: labels_test,
-                                            keep_prob: 1.0})
-                    test_acc_list.append(test_acc)
-                print("test accuracy is {}".format(test_acc))
-                return test_acc
+
+                if (LOCAL_TEST == 1):
+                    image_dir = "cpu_test_data/tmp_images/"
+                    imagenet_mean = np.array([104., 117., 124.], dtype = np.float32)
+                    test_batches_per_epoch = 3
+                    img_files = [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith('.jpeg')]
+                    imgs_test = []
+                    for i,f in enumerate(img_files):
+                        tmp = cv2.imread(f)
+                        tmp = cv2.resize(tmp.astype(np.float32), (227,227))
+                        tmp -= imagenet_mean[i]
+                        tmp = tmp.reshape((1,227,227,3))
+                        imgs_test.append(tmp)
+
+
+
+                if (LOCAL_TEST):
+                    names = []
+                    probs = []
+
+                    for step in range(test_batches_per_epoch):
+                        prob = sess.run(softmax, feed_dict = {
+                                                x: imgs_test[step],
+                                                # y: labels_test,
+                                                keep_prob: 1.0})
+                        name = class_names[np.argmax(prob)]
+                        probs.append(np.max(prob))
+                        names.append(name)
+                    print("names are {}".format(names))
+                    print("probs are {}".format(probs))
+                    sys.exit()
             # if (save_for_next_iter):
             #     print('saving for the next iteration of dynamic surgery')
             #     file_name_part = compute_file_name(cRates)

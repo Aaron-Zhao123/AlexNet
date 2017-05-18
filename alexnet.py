@@ -9,7 +9,7 @@ class AlexNet(object):
         self.KEEP_PROB = keep_prob
         self.layer_names = []
 
-        if (weights_path = 'DEFAULT'):
+        if (weights_path == 'DEFAULT'):
             self.WEIGHTS_PATH = 'bvlc_alexnet.npy'
         else:
             self.WEIGHTS_PATH = weights_path
@@ -110,12 +110,12 @@ def conv(x, filter_height, filter_width, num_filters, stride_y, stride_x, name,
     # In the cases of multiple groups, split inputs & weights and
     else:
       # Split input and weights and convolve them separately
-      input_groups = tf.split(axis = 3, num_or_size_splits=groups, value=x)
-      weight_groups = tf.split(axis = 3, num_or_size_splits=groups, value=weights)
+      input_groups = tf.split(value=x,num_or_size_splits=groups,  axis=3)
+      weight_groups = tf.split(num_or_size_splits=groups, value=weights, axis = 3)
       output_groups = [convolve(i, k) for i,k in zip(input_groups, weight_groups)]
 
       # Concat the convolved output together again
-      conv = tf.concat(axis = 3, values = output_groups)
+      conv = tf.concat(values = output_groups, axis = 3)
 
     # Add biases
     bias = tf.reshape(tf.nn.bias_add(conv, biases), conv.get_shape().as_list())
